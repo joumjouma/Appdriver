@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "Eco-share",
+    "slug": "Eco-share",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "com.googleusercontent.apps.1007561335979-uiduf2a3h59mjcdassp5hl3rgljr5tes",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.googleusercontent.apps.1007561335979-ppmh7dnmssp44fnndtvm92ikaj5nm6vt",
+      "newArchEnabled": true
+    },
+    "android": {
+      "package": "com.misscoding.ecoshare",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "googleServicesFile": "./google-services.json"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e9a028a2-5ad1-4cc3-9dbf-62a879c84314"
+      }
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
+  }
+}
