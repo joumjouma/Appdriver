@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity } from "rea
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { useNavigation } from "@react-navigation/native";
 import CavalLogo from "../assets/Caval_Logo.png";
+import { APP_CONFIG } from "../constants/appConfig";
 
 function ActivityScreen() {
   const navigation = useNavigation();
@@ -21,7 +22,7 @@ function ActivityScreen() {
       {/* Activity Cards */}
       <View style={styles.card}>
         <Text style={styles.cardHeader}>
-          Aujourd'hui à 13:51 <Text style={styles.cardType}>Caval Privé</Text>
+          Aujourd'hui à 13:51 <Text style={styles.cardType}>{APP_CONFIG.backendName}</Text>
         </Text>
         <View style={styles.cardContent}>
           <Image style={styles.logo} source={CavalLogo} />
@@ -36,7 +37,7 @@ function ActivityScreen() {
 
       <View style={styles.card}>
         <Text style={styles.cardHeader}>
-          Hier à 19:46 <Text style={styles.cardType}>Caval Taxi</Text>
+          Hier à 19:46 <Text style={styles.cardType}>{APP_CONFIG.displayName} Taxi</Text>
         </Text>
         <View style={styles.cardContent}>
           <Image style={styles.logo} source={CavalLogo} />

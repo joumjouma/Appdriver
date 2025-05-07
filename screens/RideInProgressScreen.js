@@ -14,10 +14,13 @@ import MapView, { Marker } from "react-native-maps";
 import MapViewDirections from "react-native-maps-directions";
 import { Ionicons } from "@expo/vector-icons";
 import { useRoute, useNavigation } from "@react-navigation/native";
-import { GOOGLE_MAPS_APIKEY } from "@env";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { doc, updateDoc, serverTimestamp, getDoc, onSnapshot } from "firebase/firestore";
+import { db } from "../config/firebase";
+import { getAuth } from "firebase/auth";
+import { createConversation } from "../utils/messaging";
 
 // Import your custom pin image
-// Replace with your actual asset path
 import CustomPin from "../assets/CustomPin.png";
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get("window");
@@ -26,6 +29,15 @@ const RideInProgressScreen = () => {
   const route = useRoute();
   const navigation = useNavigation();
   const mapRef = useRef(null);
+  const GOOGLE_MAPS_APIKEY = "AIzaSyBH87gAekJEssZuAX-q3lwjDjLRr0jXMNs";
+
+  // Initialize customer info from route params
+  const [customerInfo, setCustomerInfo] = useState({
+    firstName: route.params?.firstName || "",
+    number: route.params?.number || "",
+    photo: route.params?.photo || "",
+    price: route.params?.ridePrice || 0
+  });
 
   // Extract parameters from route
   const {
@@ -37,11 +49,20 @@ const RideInProgressScreen = () => {
     destinationAddress,
     driverLat,
     driverLng,
-    ridePrice,
-    customerName,
-    customerPhone,
-    customerPhotoURL,
+    rideId,
   } = route.params || {};
+
+  console.log('Route params:', {
+    pickupLat,
+    pickupLng,
+    destinationLat,
+    destinationLng,
+    pickupAddress,
+    destinationAddress,
+    driverLat,
+    driverLng,
+    rideId,
+  });
 
   // Define initial states
   const [driverLocation, setDriverLocation] = useState(
@@ -50,9 +71,24 @@ const RideInProgressScreen = () => {
   const [pickupLocation] = useState(
     pickupLat && pickupLng ? { latitude: pickupLat, longitude: pickupLng } : null
   );
-  const [dropOffLocation] = useState(
-    destinationLat && destinationLng ? { latitude: destinationLat, longitude: destinationLng } : null
-  );
+  const [dropOffLocation, setDropOffLocation] = useState(() => {
+    console.log('Initializing dropOffLocation with:', {
+      destinationLat,
+      destinationLng,
+      routeParams: route.params
+    });
+    
+    if (destinationLat && destinationLng) {
+      const location = {
+        latitude: destinationLat,
+        longitude: destinationLng
+      };
+      console.log('Created dropOffLocation:', location);
+      return location;
+    }
+    console.log('No destination coordinates available');
+    return null;
+  });
   const [hasPickedUpCustomer, setHasPickedUpCustomer] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [distance, setDistance] = useState(0);
@@ -61,18 +97,269 @@ const RideInProgressScreen = () => {
   const progress = useRef(new Animated.Value(0)).current;
   const progressAnimation = useRef(null);
   const longPressTimer = useRef(null);
+  const [currentRideId, setCurrentRideId] = useState(rideId);
+
+  // Add listener for ride status changes
+  useEffect(() => {
+    if (!currentRideId) return;
+
+    const rideRequestRef = doc(db, "rideRequests", currentRideId);
+    const unsubscribe = onSnapshot(rideRequestRef, (doc) => {
+      if (doc.exists()) {
+        const rideData = doc.data();
+        if (rideData.status === "declined") {
+          // Clear ride state and navigate back to home screen
+          clearRideState();
+          navigation.navigate("HomeScreenWithMap");
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [currentRideId]);
+
+  // Store ride state in AsyncStorage when component mounts
+  useEffect(() => {
+    const storeRideState = async () => {
+      try {
+        console.log('Storing ride state with customer info:', {
+          firstName: customerInfo.firstName,
+          number: customerInfo.number,
+          photo: customerInfo.photo,
+          ridePrice: customerInfo.price
+        });
+        
+        const rideState = {
+          pickupLat,
+          pickupLng,
+          destinationLat,
+          destinationLng,
+          pickupAddress,
+          destinationAddress,
+          driverLat,
+          driverLng,
+          ridePrice: customerInfo.price,
+          firstName: customerInfo.firstName,
+          number: customerInfo.number,
+          photo: customerInfo.photo,
+          hasPickedUpCustomer,
+          rideId: currentRideId,
+        };
+        
+        await AsyncStorage.setItem('currentRide', JSON.stringify(rideState));
+        console.log('Successfully stored ride state');
+      } catch (error) {
+        console.error('Error storing ride state:', error);
+      }
+    };
+
+    if (route.params) {
+      storeRideState();
+    }
+  }, [pickupLat, pickupLng, destinationLat, destinationLng, pickupAddress, destinationAddress, 
+      driverLat, driverLng, customerInfo, hasPickedUpCustomer, currentRideId]);
+
+  // Check for existing ride state on mount
+  useEffect(() => {
+    const checkExistingRide = async () => {
+      try {
+        const storedRide = await AsyncStorage.getItem('currentRide');
+        console.log('Checking existing ride:', storedRide);
+        if (storedRide) {
+          const rideState = JSON.parse(storedRide);
+          console.log('Found stored ride state:', rideState);
+          // Only restore if we don't have route params
+          if (!route.params) {
+            setHasPickedUpCustomer(rideState.hasPickedUpCustomer);
+            setCurrentRideId(rideState.rideId);
+            setCustomerInfo({
+              firstName: rideState.firstName || "",
+              number: rideState.number || "",
+              photo: rideState.photo || "",
+              price: rideState.ridePrice || 0
+            });
+            navigation.setParams(rideState);
+          }
+        }
+      } catch (error) {
+        console.error('Error checking existing ride:', error);
+      }
+    };
+
+    checkExistingRide();
+  }, []);
+
+  // Update ride status in Firebase when component mounts
+  useEffect(() => {
+    const updateRideStatus = async () => {
+      try {
+        const rideIdToUse = rideId || currentRideId;
+        
+        if (rideIdToUse) {
+          console.log("Updating ride status to active for ride:", rideIdToUse);
+          const rideRequestRef = doc(db, "rideRequests", rideIdToUse);
+          await updateDoc(rideRequestRef, {
+            status: "active",
+            updatedAt: serverTimestamp()
+          });
+
+          // Fetch customer information from rideRequestsDriver
+          const rideRequestDriverRef = doc(db, "rideRequestsDriver", rideIdToUse);
+          const rideRequestDriverDoc = await getDoc(rideRequestDriverRef);
+          
+          if (rideRequestDriverDoc.exists()) {
+            const rideData = rideRequestDriverDoc.data();
+            setCustomerInfo({
+              firstName: rideData.firstName || "",
+              number: rideData.number || "",
+              photo: rideData.photo || "",
+              price: rideData.fare || 0
+            });
+          }
+        } else {
+          console.warn("No rideId available to update status");
+        }
+      } catch (error) {
+        console.error("Error updating ride status:", error);
+      }
+    };
+
+    updateRideStatus();
+  }, [rideId, currentRideId]);
+
+  // Clear ride state and update Firebase when ride is completed
+  const clearRideState = async () => {
+    try {
+      const rideIdToUse = rideId || currentRideId;
+      
+      if (rideIdToUse) {
+        console.log("Completing ride:", rideIdToUse);
+        const rideRequestRef = doc(db, "rideRequests", rideIdToUse);
+        await updateDoc(rideRequestRef, {
+          status: "completed",
+          updatedAt: serverTimestamp(),
+          completedAt: serverTimestamp()
+        });
+
+        // Update driver's status to be available for new rides
+        const auth = getAuth();
+        if (auth.currentUser) {
+          const driverRef = doc(db, "Drivers", auth.currentUser.uid);
+          await updateDoc(driverRef, {
+            isAvailable: true,
+            currentRideId: null,
+            lastRideCompletedAt: serverTimestamp()
+          });
+        }
+      } else {
+        console.warn("No rideId available to complete ride");
+      }
+      
+      await AsyncStorage.removeItem('currentRide');
+    } catch (error) {
+      console.error('Error completing ride:', error);
+    }
+  };
 
   // Function to open Google Maps for navigation
   const openGoogleMapsDirections = (lat, lng) => {
+    console.log('Opening navigation to:', { lat, lng });
+    if (!lat || !lng) {
+      console.error('Invalid coordinates:', { lat, lng });
+      return;
+    }
     const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
-    Linking.openURL(url);
+    console.log('Navigation URL:', url);
+    Linking.openURL(url)
+      .then(() => {
+        // Reset isNavigating after a short delay to ensure the navigation has started
+        setTimeout(() => {
+          setIsNavigating(false);
+        }, 1000);
+      })
+      .catch(error => {
+        console.error('Error opening navigation:', error);
+        setIsNavigating(false);
+      });
     setIsNavigating(true);
   };
 
+  // Function to handle phone calls
+  const handlePhoneCall = () => {
+    if (customerInfo.number) {
+      const formattedPhone = customerInfo.number.replace(/\D/g, '');
+      console.log('Calling phone number:', formattedPhone);
+      Linking.openURL(`tel:${formattedPhone}`).catch(err => {
+        console.error('Error opening phone dialer:', err);
+      });
+    }
+  };
+
   // Function to message the customer
-  const messageCustomer = () => {
-    if (customerPhone) {
-      Linking.openURL(`sms:${customerPhone}`);
+  const messageCustomer = async () => {
+    try {
+      const auth = getAuth();
+      const currentUser = auth.currentUser;
+      
+      if (!currentUser) {
+        console.error('No authenticated user found');
+        return;
+      }
+      
+      // Get the customer ID from route params
+      let customerId = route.params?.customerId;
+      
+      // If customerId is not in route params, try to get it from the rideId
+      if (!customerId && route.params?.rideId) {
+        try {
+          console.log('No customerId in route params, fetching from rideId:', route.params.rideId);
+          const rideRequestRef = doc(db, "rideRequests", route.params.rideId);
+          const rideRequestDoc = await getDoc(rideRequestRef);
+          
+          if (rideRequestDoc.exists()) {
+            const rideData = rideRequestDoc.data();
+            customerId = rideData.userId || rideData.customerId;
+            console.log('Found customerId from ride request:', customerId);
+          }
+        } catch (error) {
+          console.error('Error fetching customer ID from ride request:', error);
+        }
+      }
+      
+      if (!customerId) {
+        console.error('No customer ID found in route params or ride request');
+        // Fallback to SMS if customerId is not available
+        if (customerInfo.number) {
+          const formattedPhone = customerInfo.number.replace(/\D/g, '');
+          Linking.openURL(`sms:${formattedPhone}`).catch(err => {
+            console.error('Error opening messaging app:', err);
+          });
+        }
+        return;
+      }
+      
+      console.log('Creating conversation between driver:', currentUser.uid, 'and customer:', customerId);
+      
+      // Create a conversation with the customer
+      const conversationId = await createConversation(currentUser.uid, customerId);
+      
+      console.log('Conversation created with ID:', conversationId);
+      
+      // Navigate to the inbox screen with the conversation ID
+      navigation.navigate('DriverInboxScreen', { 
+        conversationId,
+        customerName: `${customerInfo.firstName} ${route.params?.lastName || ''}`,
+        customerPhoto: customerInfo.photo
+      });
+    } catch (error) {
+      console.error('Error creating conversation:', error);
+      // Fallback to SMS if in-app messaging fails
+      if (customerInfo.number) {
+        const formattedPhone = customerInfo.number.replace(/\D/g, '');
+        Linking.openURL(`sms:${formattedPhone}`).catch(err => {
+          console.error('Error opening messaging app:', err);
+        });
+      }
     }
   };
 
@@ -81,33 +368,47 @@ const RideInProgressScreen = () => {
     if (mapRef.current && driverLocation) {
       setTimeout(() => {
         fitMapToRoute();
-      }, 500); // Short delay to ensure map is ready
+      }, 500);
     }
   }, []);
 
   // Function to fit map to show the entire route with more zoom out
   const fitMapToRoute = () => {
     if (mapRef.current && driverLocation) {
-      const locations = [driverLocation];
-      if (pickupLocation) locations.push(pickupLocation);
-      if (dropOffLocation) locations.push(dropOffLocation);
+      const locations = [];
+      
+      // Always include driver location
+      locations.push(driverLocation);
+      
+      // Add relevant destination based on ride state
+      if (!hasPickedUpCustomer && pickupLocation) {
+        locations.push(pickupLocation);
+      } else if (hasPickedUpCustomer && dropOffLocation) {
+        locations.push(dropOffLocation);
+      }
 
-      // Use much larger padding to ensure routes are visible and zoomed out further
+      // Add extra padding for better visibility
+      const padding = {
+        top: 200,
+        right: 100,
+        bottom: 500,
+        left: 100
+      };
+
       mapRef.current.fitToCoordinates(locations, {
-        edgePadding: { top: 150, right: 150, bottom: 450, left: 150 },
+        edgePadding: padding,
         animated: true,
       });
     }
   };
 
-  // Handler for directions ready - FIXED THIS FUNCTION
+  // Handler for directions ready
   const handleDirectionsReady = (result) => {
     if (result && typeof result.distance === 'number' && typeof result.duration === 'number') {
       setDistance(result.distance);
       setDuration(result.duration);
     }
     
-    // Re-fit map when directions are ready to ensure entire route is visible
     fitMapToRoute();
   };
 
@@ -128,13 +429,12 @@ const RideInProgressScreen = () => {
     setPressing(true);
     progressAnimation.current = Animated.timing(progress, {
       toValue: 1,
-      duration: 2000, // Longer duration (2 seconds) for press and hold
+      duration: 2000,
       useNativeDriver: false,
     });
     
     progressAnimation.current.start();
     
-    // Set a timer to execute callback after the animation completes
     longPressTimer.current = setTimeout(() => {
       callback();
       resetPress();
@@ -158,8 +458,39 @@ const RideInProgressScreen = () => {
 
   // Recenter map to show full route
   const recenterMap = () => {
-    fitMapToRoute();
+    // Add a small delay to ensure smooth recentering
+    setTimeout(() => {
+      fitMapToRoute();
+    }, 100);
   };
+
+  // Update ride status when customer is picked up
+  const handleCustomerPickup = async () => {
+    try {
+      setHasPickedUpCustomer(true);
+      
+      const rideIdToUse = rideId || currentRideId;
+      if (rideIdToUse) {
+        const rideRequestRef = doc(db, "rideRequests", rideIdToUse);
+        await updateDoc(rideRequestRef, {
+          customerPickedUp: true,
+          pickupTime: serverTimestamp()
+        });
+      }
+    } catch (error) {
+      console.error("Error updating pickup status:", error);
+    }
+  };
+
+  // Log state changes
+  useEffect(() => {
+    console.log('State updated:', {
+      hasPickedUpCustomer,
+      dropOffLocation,
+      destinationLat,
+      destinationLng
+    });
+  }, [hasPickedUpCustomer, dropOffLocation, destinationLat, destinationLng]);
 
   // Loading state
   if (!pickupLocation || !driverLocation) {
@@ -179,8 +510,8 @@ const RideInProgressScreen = () => {
         initialRegion={{
           latitude: driverLocation.latitude,
           longitude: driverLocation.longitude,
-          latitudeDelta: 0.15, // Increased to show more of the map initially
-          longitudeDelta: 0.15, // Increased to show more of the map initially
+          latitudeDelta: 0.15,
+          longitudeDelta: 0.15,
         }}
         showsUserLocation
         showsMyLocationButton
@@ -241,13 +572,6 @@ const RideInProgressScreen = () => {
         </Marker>
       </MapView>
 
-      {/* Back Button */}
-      <View style={styles.backButtonContainer}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={28} color="#FF6F00" />
-        </TouchableOpacity>
-      </View>
-
       {/* Recenter Button */}
       <View style={styles.recenterButtonContainer}>
         <TouchableOpacity onPress={recenterMap}>
@@ -255,36 +579,50 @@ const RideInProgressScreen = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Customer Info Banner - Always visible at top */}
-      <View style={styles.customerInfoBanner}>
-        <View style={styles.avatarContainer}>
-          {customerPhotoURL ? (
-            <Image source={{ uri: customerPhotoURL }} style={styles.avatarImage} />
-          ) : (
-            <Ionicons name="person" size={24} color="#fff" />
-          )}
+      {/* Customer Info Banner */}
+      <View style={styles.newCustomerBanner}>
+        <View style={styles.newBannerHeader}>
+          <View style={styles.newAvatarContainer}>
+            {customerInfo.photo ? (
+              <Image 
+                source={{ uri: customerInfo.photo }} 
+                style={styles.newAvatarImage} 
+                resizeMode="cover"
+              />
+            ) : (
+              <Ionicons name="person" size={24} color="#fff" />
+            )}
+          </View>
+          <View style={styles.newCustomerInfo}>
+            <Text style={styles.newCustomerFirstName}>
+              {customerInfo.firstName || "Client"}
+            </Text>
+            <Text style={styles.newCustomerPhone}>
+              {customerInfo.number || "Téléphone non disponible"}
+            </Text>
+            <Text style={styles.newRidePrice}>
+              {customerInfo.price ? `${customerInfo.price.toFixed(2)} Fdj` : "Prix non disponible"}
+            </Text>
+          </View>
         </View>
-        <View style={styles.customerBannerDetails}>
-          <Text style={styles.customerBannerName}>{customerName || "Client"}</Text>
-          <Text style={styles.customerBannerPhone}>{customerPhone || "Téléphone non disponible"}</Text>
-          <Text style={styles.customerBannerRide}>
-            {ridePrice ? `${ridePrice.toFixed(2)} Fdj` : "Prix non disponible"}
-          </Text>
-        </View>
-        <View style={styles.bannerButtonContainer}>
+        
+        <View style={styles.newActionButtons}>
           <TouchableOpacity 
-            style={[styles.bannerButton, !customerPhone && styles.disabledButton]} 
-            onPress={() => customerPhone && Linking.openURL(`tel:${customerPhone}`)}
-            disabled={!customerPhone}
+            style={styles.newActionButton} 
+            onPress={handlePhoneCall}
+            activeOpacity={0.7}
           >
-            <Ionicons name="call" size={20} color="#fff" />
+            <Ionicons name="call" size={24} color="#fff" />
+            <Text style={styles.newButtonText}>Appeler</Text>
           </TouchableOpacity>
+          
           <TouchableOpacity 
-            style={[styles.bannerButton, !customerPhone && styles.disabledButton]} 
+            style={styles.newActionButton} 
             onPress={messageCustomer}
-            disabled={!customerPhone}
+            activeOpacity={0.7}
           >
-            <Ionicons name="chatbubble" size={20} color="#fff" />
+            <Ionicons name="chatbubble" size={24} color="#fff" />
+            <Text style={styles.newButtonText}>Message</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -292,7 +630,7 @@ const RideInProgressScreen = () => {
       {/* Ride Details */}
       <View style={styles.bottomSheet}>
         <Text style={styles.headerText}>
-          {hasPickedUpCustomer ? "En route vers la destination" : "En route vers la destination"}
+          {hasPickedUpCustomer ? "En route vers la destination" : "En route vers le client"}
         </Text>
 
         {/* Ride Info */}
@@ -307,7 +645,9 @@ const RideInProgressScreen = () => {
           </View>
           <View style={styles.rideInfoItem}>
             <Text style={styles.rideInfoLabel}>Tarif</Text>
-            <Text style={styles.rideInfoValue}>{ridePrice ? `${ridePrice.toFixed(2)} Fdj` : "N/A"}</Text>
+            <Text style={styles.rideInfoValue}>
+              {customerInfo.price ? `${customerInfo.price.toFixed(2)} Fdj` : "N/A"}
+            </Text>
           </View>
         </View>
 
@@ -334,13 +674,12 @@ const RideInProgressScreen = () => {
               onPress={() => openGoogleMapsDirections(pickupLocation.latitude, pickupLocation.longitude)}
               disabled={isNavigating}
             >
-              <Text style={styles.buttonText}>Naviguer vers le pickup</Text>
+              <Text style={styles.buttonText}>Naviguer vers le client</Text>
             </TouchableOpacity>
             
-            {/* Hold to confirm button */}
             <TouchableOpacity 
               style={styles.buttonSecondary}
-              onPressIn={() => startLongPress(() => setHasPickedUpCustomer(true))}
+              onPressIn={() => startLongPress(handleCustomerPickup)}
               onPressOut={cancelLongPress}
               activeOpacity={0.9}
             >
@@ -365,17 +704,40 @@ const RideInProgressScreen = () => {
         ) : (
           <>
             <TouchableOpacity 
-              style={styles.buttonPrimary}
-              onPress={() => openGoogleMapsDirections(dropOffLocation.latitude, dropOffLocation.longitude)}
-              disabled={isNavigating}
+              style={[
+                styles.buttonPrimary,
+                (!dropOffLocation || isNavigating) && styles.disabledButton
+              ]}
+              onPress={() => {
+                console.log('Navigation button pressed');
+                console.log('Current state:', {
+                  hasPickedUpCustomer,
+                  isNavigating,
+                  dropOffLocation,
+                  destinationLat,
+                  destinationLng
+                });
+                if (dropOffLocation) {
+                  console.log('Opening navigation with coordinates:', {
+                    latitude: dropOffLocation.latitude,
+                    longitude: dropOffLocation.longitude
+                  });
+                  openGoogleMapsDirections(dropOffLocation.latitude, dropOffLocation.longitude);
+                } else {
+                  console.error('No drop-off location available');
+                }
+              }}
+              disabled={isNavigating || !dropOffLocation}
             >
-              <Text style={styles.buttonText}>Naviguer vers le drop-off</Text>
+              <Text style={styles.buttonText}>Naviguer vers la destination</Text>
             </TouchableOpacity>
             
-            {/* Hold to confirm button */}
             <TouchableOpacity 
               style={styles.buttonSecondary}
-              onPressIn={() => startLongPress(() => navigation.navigate("HomeScreenWithMap", { rideCompleted: true }))}
+              onPressIn={() => startLongPress(async () => {
+                await clearRideState();
+                navigation.navigate("HomeScreenWithMap", { rideCompleted: true });
+              })}
               onPressOut={cancelLongPress}
               activeOpacity={0.9}
             >
@@ -403,8 +765,6 @@ const RideInProgressScreen = () => {
   );
 };
 
-export default RideInProgressScreen;
-
 const styles = StyleSheet.create({
   container: { 
     flex: 1,
@@ -418,81 +778,6 @@ const styles = StyleSheet.create({
   },
   map: { 
     flex: 1 
-  },
-  backButtonContainer: {
-    position: "absolute",
-    top: 40,
-    left: 20,
-    zIndex: 100,
-    backgroundColor: "#1E1E1E",
-    borderRadius: 25,
-    padding: 8,
-    shadowColor: "#000",
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  recenterButtonContainer: {
-    position: "absolute",
-    top: 40,
-    right: 20,
-    zIndex: 100,
-    backgroundColor: "#1E1E1E",
-    borderRadius: 25,
-    padding: 8,
-    shadowColor: "#000",
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  customerInfoBanner: {
-    position: "absolute",
-    top: 90,
-    left: 20,
-    right: 20,
-    zIndex: 100,
-    backgroundColor: "rgba(30, 30, 30, 0.9)",
-    borderRadius: 15,
-    padding: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOpacity: 0.4,
-    shadowRadius: 5,
-    elevation: 6,
-    borderWidth: 1,
-    borderColor: "#FF6F00",
-  },
-  customerBannerDetails: {
-    flex: 1,
-    marginLeft: 10,
-  },
-  customerBannerName: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  customerBannerPhone: {
-    color: "#b3b3b3",
-    fontSize: 14,
-  },
-  customerBannerRide: {
-    color: "#FF6F00",
-    fontSize: 14,
-    marginTop: 2,
-  },
-  bannerButtonContainer: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 8,
-  },
-  bannerButton: {
-    backgroundColor: "#FF6F00",
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: "center",
-    alignItems: "center",
   },
   markerContainer: {
     flexDirection: "row",
@@ -545,24 +830,6 @@ const styles = StyleSheet.create({
     color: "#fff",
     marginBottom: 20,
     textAlign: "center",
-  },
-  avatarContainer: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: "#FF6F00",
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 0,
-    overflow: "hidden",
-  },
-  avatarImage: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-  },
-  disabledButton: {
-    backgroundColor: "#5F5F5F",
   },
   rideInfoContainer: {
     flexDirection: "row",
@@ -646,4 +913,94 @@ const styles = StyleSheet.create({
     height: "100%",
     backgroundColor: "#fff",
   },
+  disabledButton: {
+    backgroundColor: "#5F5F5F",
+    opacity: 0.5,
+  },
+  newCustomerBanner: {
+    position: "absolute",
+    top: 90,
+    left: 20,
+    right: 20,
+    zIndex: 100,
+    backgroundColor: "rgba(30, 30, 30, 0.95)",
+    borderRadius: 15,
+    padding: 15,
+    shadowColor: "#000",
+    shadowOpacity: 0.4,
+    shadowRadius: 5,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: "#FF6F00",
+  },
+  newBannerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 15,
+  },
+  newAvatarContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "#FF6F00",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 15,
+    overflow: "hidden",
+  },
+  newAvatarImage: {
+    width: "100%",
+    height: "100%",
+  },
+  newCustomerInfo: {
+    flex: 1,
+  },
+  newCustomerFirstName: {
+    color: "#fff",
+    fontSize: 20,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  newCustomerPhone: {
+    color: "#b3b3b3",
+    fontSize: 16,
+    marginBottom: 4,
+  },
+  newRidePrice: {
+    color: "#FF6F00",
+    fontSize: 18,
+    fontWeight: "600",
+  },
+  newActionButtons: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    marginTop: 10,
+  },
+  newActionButton: {
+    backgroundColor: "#FF6F00",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 25,
+    minWidth: 120,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  newButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+    marginLeft: 8,
+  },
+  newDisabledButton: {
+    backgroundColor: "#5F5F5F",
+    opacity: 0.5,
+  },
 });
+
+export default RideInProgressScreen;

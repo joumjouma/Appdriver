@@ -11,6 +11,7 @@ import MapViewDirections from "react-native-maps-directions";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { GOOGLE_MAPS_APIKEY } from "@env";
+import { APP_CONFIG } from "../constants/appConfig";
 
 const RideOptionsScreen = () => {
   const route = useRoute();
@@ -36,6 +37,7 @@ const RideOptionsScreen = () => {
   const [distance, setDistance] = useState(0);    // in km
   const [duration, setDuration] = useState(0);    // in minutes
 
+  // Use APP_CONFIG for ride type names
   const [cavalPriveFare, setCavalPriveFare] = useState(0);
   const [cavalPoolFare, setCavalPoolFare] = useState(390); // or your own logic
   const [cavalTaxiFare, setCavalTaxiFare] = useState(0);
@@ -136,9 +138,9 @@ const RideOptionsScreen = () => {
         <TouchableOpacity
           style={[
             styles.rideOptionLarge,
-            selectedRide === "Caval Privé" && styles.selectedOption
+            selectedRide === APP_CONFIG.backendName && styles.selectedOption
           ]}
-          onPress={() => handleRideSelect("Caval Privé")}
+          onPress={() => handleRideSelect(APP_CONFIG.backendName)}
         >
           <Ionicons 
             name="car" 
@@ -147,7 +149,7 @@ const RideOptionsScreen = () => {
             style={styles.icon} 
           />
           <View style={styles.infoContainer}>
-            <Text style={styles.rideTitleLarge}>Caval Privé</Text>
+            <Text style={styles.rideTitleLarge}>{APP_CONFIG.displayName} Privé</Text>
             <Text style={styles.rideSubtitleLarge}>
               Arrive vers {getFormattedArrivalTime(duration)} • {distance.toFixed(1)} km
             </Text>
@@ -159,9 +161,9 @@ const RideOptionsScreen = () => {
         <TouchableOpacity
           style={[
             styles.rideOptionLarge,
-            selectedRide === "Caval Pool" && styles.selectedOption
+            selectedRide === `${APP_CONFIG.displayName} Pool` && styles.selectedOption
           ]}
-          onPress={() => handleRideSelect("Caval Pool")}
+          onPress={() => handleRideSelect(`${APP_CONFIG.displayName} Pool`)}
         >
           <Ionicons 
             name="car-sport" 
@@ -170,7 +172,7 @@ const RideOptionsScreen = () => {
             style={styles.icon} 
           />
           <View style={styles.infoContainer}>
-            <Text style={styles.rideTitleLarge}>Caval Pool</Text>
+            <Text style={styles.rideTitleLarge}>{APP_CONFIG.displayName} Pool</Text>
             <Text style={styles.rideSubtitleLarge}>
               Arrive vers {getFormattedArrivalTime(duration)} • {distance.toFixed(1)} km
             </Text>
@@ -185,9 +187,9 @@ const RideOptionsScreen = () => {
         <TouchableOpacity
           style={[
             styles.rideOptionLarge,
-            selectedRide === "Caval Taxi" && styles.selectedOption
+            selectedRide === `${APP_CONFIG.displayName} Taxi` && styles.selectedOption
           ]}
-          onPress={() => handleRideSelect("Caval Taxi")}
+          onPress={() => handleRideSelect(`${APP_CONFIG.displayName} Taxi`)}
         >
           {/** CHANGED HERE: replaced name="taxi" with a valid Ionicon, e.g. "car-sharp" */}
           <Ionicons 
@@ -197,7 +199,7 @@ const RideOptionsScreen = () => {
             style={styles.icon} 
           />
           <View style={styles.infoContainer}>
-            <Text style={styles.rideTitleLarge}>Caval Taxi</Text>
+            <Text style={styles.rideTitleLarge}>{APP_CONFIG.displayName} Taxi</Text>
             <Text style={styles.rideSubtitleLarge}>
               Arrive vers {getFormattedArrivalTime(duration)} • {distance.toFixed(1)} km
             </Text>
