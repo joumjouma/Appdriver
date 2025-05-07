@@ -13,6 +13,9 @@ import {
   Modal,
   ActivityIndicator,
   Animated,
+  Dimensions,
+  Alert,
+  Linking,
 } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import { Ionicons, MaterialIcons, FontAwesome5 } from "@expo/vector-icons";
